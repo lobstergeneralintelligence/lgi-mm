@@ -6,10 +6,21 @@ dist/
 
 # Config with secrets
 config.json
+secrets.json
+*.secret
+*.key
+*.pem
 
 # Environment
 .env
+.env.*
 .env.local
+.env.production
+
+# Credentials
+credentials.json
+auth.json
+api-keys.json
 
 # OS
 .DS_Store
