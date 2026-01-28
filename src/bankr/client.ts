@@ -21,11 +21,11 @@ export interface BankrClientOptions {
 }
 
 export interface BankrClient {
-  getPrice(token: string, quote: string): Promise<PriceData>;
-  getBalance(token: string): Promise<number>;
-  buy(token: string, amountUsd: number): Promise<Trade>;
-  sell(token: string, amountUsd: number): Promise<Trade>;
-  getPosition(baseToken: string, quoteToken: string): Promise<Position>;
+  getPrice(token: string, quote: string, tokenAddress?: string): Promise<PriceData>;
+  getBalance(token: string, tokenAddress?: string): Promise<number>;
+  buy(token: string, amountUsd: number, tokenAddress?: string): Promise<Trade>;
+  sell(token: string, amountUsd: number, tokenAddress?: string): Promise<Trade>;
+  getPosition(baseToken: string, quoteToken: string, baseAddress?: string, quoteAddress?: string): Promise<Position>;
 }
 
 interface BankrConfig {
@@ -224,7 +224,7 @@ export function createBankrClient(options: BankrClientOptions): BankrClient {
   let simPrice = 10; // Mock price
 
   return {
-    async getPrice(token: string, quote: string): Promise<PriceData> {
+    async getPrice(token: string, quote: string, tokenAddress?: string): Promise<PriceData> {
       if (mode === 'simulation') {
         // Simulate small price movements
         simPrice = simPrice * (1 + (Math.random() - 0.5) * 0.02);
@@ -236,7 +236,9 @@ export function createBankrClient(options: BankrClientOptions): BankrClient {
       }
 
       // Live: query Bankr for price
-      const prompt = `What is the price of ${token} in ${quote} on ${chain}?`;
+      // Use contract address if provided (more reliable for obscure tokens)
+      const tokenRef = tokenAddress || token;
+      const prompt = `What is the price of ${tokenRef} on ${chain}?`;
       const response = await executeBankrPrompt(prompt, bankrConfig!);
       
       const price = parsePrice(response);
@@ -254,12 +256,13 @@ export function createBankrClient(options: BankrClientOptions): BankrClient {
       };
     },
 
-    async getBalance(token: string): Promise<number> {
+    async getBalance(token: string, tokenAddress?: string): Promise<number> {
       if (mode === 'simulation') {
         return token === 'USDC' ? simBalance.quote : simBalance.base;
       }
 
-      const prompt = `What is my ${token} balance on ${chain}?`;
+      const tokenRef = tokenAddress || token;
+      const prompt = `What is my ${tokenRef} balance on ${chain}?`;
       const response = await executeBankrPrompt(prompt, bankrConfig!);
       
       const balance = parseBalance(response, token);
@@ -271,7 +274,7 @@ export function createBankrClient(options: BankrClientOptions): BankrClient {
       return balance;
     },
 
-    async buy(token: string, amountUsd: number): Promise<Trade> {
+    async buy(token: string, amountUsd: number, tokenAddress?: string): Promise<Trade> {
       const tradeId = `trade_${Date.now()}`;
       
       if (mode === 'simulation') {
@@ -292,8 +295,9 @@ export function createBankrClient(options: BankrClientOptions): BankrClient {
         };
       }
 
-      // Live: execute buy via Bankr
-      const prompt = `Buy $${amountUsd} worth of ${token} on ${chain}`;
+      // Live: execute buy via Bankr (use contract address if provided)
+      const tokenRef = tokenAddress || token;
+      const prompt = `Buy $${amountUsd} worth of ${tokenRef} on ${chain}`;
       logger.info(`Executing Bankr buy: ${prompt}`);
       
       const response = await executeBankrPrompt(prompt, bankrConfig!);
@@ -313,7 +317,7 @@ export function createBankrClient(options: BankrClientOptions): BankrClient {
       };
     },
 
-    async sell(token: string, amountUsd: number): Promise<Trade> {
+    async sell(token: string, amountUsd: number, tokenAddress?: string): Promise<Trade> {
       const tradeId = `trade_${Date.now()}`;
       
       if (mode === 'simulation') {
@@ -334,8 +338,9 @@ export function createBankrClient(options: BankrClientOptions): BankrClient {
         };
       }
 
-      // Live: execute sell via Bankr
-      const prompt = `Sell $${amountUsd} worth of ${token} on ${chain}`;
+      // Live: execute sell via Bankr (use contract address if provided)
+      const tokenRef = tokenAddress || token;
+      const prompt = `Sell $${amountUsd} worth of ${tokenRef} on ${chain}`;
       logger.info(`Executing Bankr sell: ${prompt}`);
       
       const response = await executeBankrPrompt(prompt, bankrConfig!);
@@ -354,7 +359,7 @@ export function createBankrClient(options: BankrClientOptions): BankrClient {
       };
     },
 
-    async getPosition(baseToken: string, quoteToken: string): Promise<Position> {
+    async getPosition(baseToken: string, quoteToken: string, baseAddress?: string, quoteAddress?: string): Promise<Position> {
       if (mode === 'simulation') {
         const priceData = await this.getPrice(baseToken, quoteToken);
         return {
@@ -369,9 +374,9 @@ export function createBankrClient(options: BankrClientOptions): BankrClient {
 
       // For live mode, we need to get balances and price
       const [baseBalance, quoteBalance, priceData] = await Promise.all([
-        this.getBalance(baseToken),
-        this.getBalance(quoteToken),
-        this.getPrice(baseToken, quoteToken),
+        this.getBalance(baseToken, baseAddress),
+        this.getBalance(quoteToken, quoteAddress),
+        this.getPrice(baseToken, quoteToken, baseAddress),
       ]);
       
       const baseValueUsd = baseBalance * priceData.price;

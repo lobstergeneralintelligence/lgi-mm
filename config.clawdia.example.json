@@ -1,18 +1,19 @@
 {
   "pair": {
     "base": "CLAWDIA",
+    "baseAddress": "0xbbd9aDe16525acb4B336b6dAd3b9762901522B07",
     "quote": "ETH",
     "chain": "base"
   },
   "strategy": {
-    "spreadPercent": 3.0,
-    "positionSize": 50,
-    "rebalanceThreshold": 15
+    "spreadPercent": 5.0,
+    "positionSize": 25,
+    "rebalanceThreshold": 20
   },
   "limits": {
-    "maxPositionUsd": 500,
-    "minTradeUsd": 10,
-    "maxTradesPerHour": 10
+    "maxPositionUsd": 200,
+    "minTradeUsd": 5,
+    "maxTradesPerHour": 6
   },
   "notifications": {
     "enabled": true,

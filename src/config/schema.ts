@@ -8,7 +8,9 @@ const chainSchema = z.enum(['base', 'ethereum', 'polygon', 'solana', 'unichain']
 
 const tokenPairSchema = z.object({
   base: z.string().min(1, 'Base token is required'),
+  baseAddress: z.string().optional(),  // Contract address (more reliable for obscure tokens)
   quote: z.string().default('USDC'),
+  quoteAddress: z.string().optional(),
   chain: chainSchema.default('base'),
 });
 

@@ -3,9 +3,11 @@
  */
 
 export interface TokenPair {
-  base: string;      // Token to market make (e.g., "CLAWDIA", "ETH")
-  quote: string;     // Quote token (e.g., "USDC", "ETH")
-  chain: Chain;      // Which chain to operate on
+  base: string;           // Token symbol (e.g., "CLAWDIA", "ETH")
+  baseAddress?: string;   // Contract address (more reliable for obscure tokens)
+  quote: string;          // Quote token (e.g., "USDC", "ETH")
+  quoteAddress?: string;  // Quote contract address
+  chain: Chain;           // Which chain to operate on
 }
 
 export type Chain = 'base' | 'ethereum' | 'polygon' | 'solana' | 'unichain';

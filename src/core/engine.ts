@@ -84,8 +84,8 @@ export function createEngine(config: Config, bankr: BankrClient): MarketMakerEng
    */
   async function tick(): Promise<void> {
     try {
-      // 1. Get current price
-      const priceData = await bankr.getPrice(pair.base, pair.quote);
+      // 1. Get current price (use contract address if available)
+      const priceData = await bankr.getPrice(pair.base, pair.quote, pair.baseAddress);
       state.lastPrice = priceData;
       
       // Track price history
@@ -99,8 +99,8 @@ export function createEngine(config: Config, bankr: BankrClient): MarketMakerEng
       
       logger.debug(`Price: ${priceData.price.toFixed(6)} | Bid: ${levels.bid.toFixed(6)} | Ask: ${levels.ask.toFixed(6)}`);
 
-      // 3. Get current position
-      const position = await bankr.getPosition(pair.base, pair.quote);
+      // 3. Get current position (use contract addresses if available)
+      const position = await bankr.getPosition(pair.base, pair.quote, pair.baseAddress, pair.quoteAddress);
       state.position = position;
 
       // 4. Check rate limits
@@ -158,9 +158,9 @@ export function createEngine(config: Config, bankr: BankrClient): MarketMakerEng
 
     let trade: Trade;
     if (action === 'buy') {
-      trade = await bankr.buy(pair.base, tradeSize);
+      trade = await bankr.buy(pair.base, tradeSize, pair.baseAddress);
     } else {
-      trade = await bankr.sell(pair.base, tradeSize);
+      trade = await bankr.sell(pair.base, tradeSize, pair.baseAddress);
     }
 
     state.lastTrade = trade;
@@ -204,7 +204,7 @@ export function createEngine(config: Config, bankr: BankrClient): MarketMakerEng
         logger.info(`[DRY RUN] Would BUY $${strategy.positionSize} of ${pair.base} at ~${levels.bid.toFixed(6)}`);
         return;
       }
-      const trade = await bankr.buy(pair.base, strategy.positionSize);
+      const trade = await bankr.buy(pair.base, strategy.positionSize, pair.baseAddress);
       state.lastTrade = trade;
       tradesThisHour++;
     } else if (action === 'sell' && canSell) {
@@ -212,7 +212,7 @@ export function createEngine(config: Config, bankr: BankrClient): MarketMakerEng
         logger.info(`[DRY RUN] Would SELL $${strategy.positionSize} of ${pair.base} at ~${levels.ask.toFixed(6)}`);
         return;
       }
-      const trade = await bankr.sell(pair.base, strategy.positionSize);
+      const trade = await bankr.sell(pair.base, strategy.positionSize, pair.baseAddress);
       state.lastTrade = trade;
       tradesThisHour++;
     }
@@ -242,8 +242,8 @@ export function createEngine(config: Config, bankr: BankrClient): MarketMakerEng
       // Run initial tick
       await tick();
 
-      // Set up main loop (every 30 seconds)
-      const TICK_INTERVAL_MS = 30_000;
+      // Set up main loop (every 3 minutes - Bankr needs ~60-80s per query)
+      const TICK_INTERVAL_MS = 180_000;
       loopInterval = setInterval(() => {
         tick().catch((err) => {
           logger.error(`Tick failed: ${err}`);
