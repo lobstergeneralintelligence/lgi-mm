@@ -10,6 +10,7 @@ import { logger } from '../utils/logger.js';
 import { getTokenPrice } from '../price/dexscreener.js';
 import { createAccumulateEngine, type AccumulateEngine } from './accumulate.js';
 import type { BankrClient } from '../bankr/client.js';
+import type { Job } from '../db/index.js';
 import type { Config, MarketMakerState, PriceData, Trade, Position, AccumulateState } from '../types/index.js';
 
 export interface MarketMakerEngine {
@@ -17,6 +18,7 @@ export interface MarketMakerEngine {
   stop(): void;
   getState(): MarketMakerState;
   getAccumulateState(): AccumulateState | undefined;
+  getJobId(): string | undefined;
 }
 
 interface PriceLevel {
@@ -57,7 +59,7 @@ function needsRebalance(position: Position, targetRatio: number, threshold: numb
 /**
  * Create a market maker engine
  */
-export function createEngine(config: Config, bankr: BankrClient): MarketMakerEngine {
+export function createEngine(config: Config, bankr: BankrClient, job?: Job): MarketMakerEngine {
   const { pair, strategy, limits } = config;
   
   let isRunning = false;
@@ -78,8 +80,8 @@ export function createEngine(config: Config, bankr: BankrClient): MarketMakerEng
   // Mode-specific engines
   let accumulateEngine: AccumulateEngine | null = null;
   
-  if (config.mode === 'accumulate') {
-    accumulateEngine = createAccumulateEngine(config, bankr);
+  if (config.mode === 'accumulate' && job) {
+    accumulateEngine = createAccumulateEngine(config, bankr, job);
   }
 
   // Track recent prices for trend detection (optional enhancement)
@@ -317,6 +319,10 @@ export function createEngine(config: Config, bankr: BankrClient): MarketMakerEng
 
     getAccumulateState(): AccumulateState | undefined {
       return accumulateEngine?.getState();
+    },
+
+    getJobId(): string | undefined {
+      return accumulateEngine?.getJobId();
     },
   };
 }

@@ -2,6 +2,7 @@
  * Accumulate Mode Engine
  * 
  * DCA + dip buying strategy for building a position over time.
+ * Now with database persistence for crash recovery.
  * 
  * Logic:
  * 1. Regular DCA buys on schedule (every X hours)
@@ -12,6 +13,11 @@
 
 import { logger } from '../utils/logger.js';
 import { getTokenPrice } from '../price/dexscreener.js';
+import { 
+  updateAccumulateState, 
+  recordTradeWithStateUpdate,
+  type Job 
+} from '../db/index.js';
 import type { BankrClient } from '../bankr/client.js';
 import type { 
   Config, 
@@ -23,27 +29,49 @@ import type {
 export interface AccumulateEngine {
   tick(): Promise<void>;
   getState(): AccumulateState;
-  setState(state: Partial<AccumulateState>): void;
+  getJobId(): string;
 }
 
 /**
- * Create accumulate mode engine
+ * Create accumulate mode engine with DB persistence
  */
 export function createAccumulateEngine(
   config: Config,
-  bankr: BankrClient
+  bankr: BankrClient,
+  job: Job
 ): AccumulateEngine {
   const { pair, limits } = config;
   const acc = config.accumulate as AccumulateConfig;
+  const jobId = job.id;
 
-  // State - should be persisted between restarts
+  // Load state from job (persisted in DB)
   const state: AccumulateState = {
-    lastDcaBuyTime: null,
-    recentHigh: 0,
-    recentHighTime: null,
-    totalAccumulated: 0,
-    tokenBalance: 0,
+    lastDcaBuyTime: job.lastDcaBuyTime,
+    recentHigh: job.recentHigh,
+    recentHighTime: job.recentHighTime,
+    totalAccumulated: job.totalAccumulated,
+    tokenBalance: job.tokenBalance,
   };
+
+  logger.info('Accumulate engine initialized from DB state', {
+    jobId,
+    tokenBalance: state.tokenBalance,
+    totalAccumulated: state.totalAccumulated,
+    lastDcaBuyTime: state.lastDcaBuyTime,
+  });
+
+  /**
+   * Save state to database
+   */
+  async function saveState(): Promise<void> {
+    await updateAccumulateState(jobId, {
+      lastDcaBuyTime: state.lastDcaBuyTime ?? undefined,
+      recentHigh: state.recentHigh,
+      recentHighTime: state.recentHighTime ?? undefined,
+      tokenBalance: state.tokenBalance,
+      totalAccumulated: state.totalAccumulated,
+    });
+  }
 
   /**
    * Check if it's time for a DCA buy
@@ -100,90 +128,138 @@ export function createAccumulateEngine(
   }
 
   /**
-   * Execute a buy
+   * Execute a buy and record to DB
    */
-  async function executeBuy(amount: number, reason: string, currentPrice: number, quoteBalance: number): Promise<void> {
+  async function executeBuy(
+    amount: number, 
+    reason: 'DCA' | 'DIP_BUY', 
+    currentPrice: number, 
+    quoteBalanceUsd: number
+  ): Promise<boolean> {
     if (amount < limits.minTradeUsd) {
       logger.debug(`Buy amount $${amount} below minimum $${limits.minTradeUsd}`);
-      return;
+      return false;
     }
 
-    // Check if we've hit max accumulation (use tracked state instead of API call)
+    // Check if we've hit max accumulation
     const currentValueUsd = state.tokenBalance * currentPrice;
     if (currentValueUsd >= acc.maxAccumulationUsd) {
       logger.info(`Max accumulation reached ($${currentValueUsd.toFixed(2)} >= $${acc.maxAccumulationUsd})`);
-      return;
+      return false;
     }
 
     // Check if we have enough quote balance
-    if (quoteBalance < amount) {
-      logger.warn(`Insufficient ${pair.quote} balance: ${quoteBalance.toFixed(4)} < $${amount}`);
-      return;
+    if (quoteBalanceUsd < amount) {
+      logger.warn(`Insufficient ${pair.quote} balance: $${quoteBalanceUsd.toFixed(2)} < $${amount}`);
+      return false;
     }
 
     if (config.dryRun) {
       logger.info(`[DRY RUN] Would BUY $${amount} of ${pair.base} (${reason})`);
-      return;
+      // Still update state for dry run testing
+      if (reason === 'DCA') {
+        state.lastDcaBuyTime = new Date();
+        await saveState();
+      }
+      return true;
     }
 
     logger.info(`Executing ${reason}: BUY $${amount} of ${pair.base}`);
     
     const trade = await bankr.buy(pair.base, amount, pair.baseAddress);
     
-    // Update state
+    // Update local state
     state.totalAccumulated += amount;
     if (trade.baseAmount) {
       state.tokenBalance += trade.baseAmount;
     }
-    
     if (reason === 'DCA') {
       state.lastDcaBuyTime = new Date();
     }
 
-    logger.info(`${reason} BUY executed`, {
+    // Calculate new average buy price
+    const avgBuyPrice = state.tokenBalance > 0 
+      ? state.totalAccumulated / state.tokenBalance 
+      : 0;
+
+    // Record trade and update state atomically in DB
+    await recordTradeWithStateUpdate(jobId, {
+      side: 'BUY',
+      reason: reason,
+      baseAmount: trade.baseAmount || 0,
+      quoteAmount: amount,
+      priceUsd: currentPrice,
+      txHash: trade.txHash,
+    }, {
+      tokenBalance: state.tokenBalance,
+      totalAccumulated: state.totalAccumulated,
+      avgBuyPrice,
+      lastDcaBuyTime: reason === 'DCA' ? new Date() : undefined,
+      recentHigh: state.recentHigh,
+      recentHighTime: state.recentHighTime,
+    });
+
+    logger.info(`${reason} BUY executed and saved to DB`, {
       amount,
       token: pair.base,
       price: trade.price,
       totalAccumulated: state.totalAccumulated,
+      tokenBalance: state.tokenBalance,
     });
+
+    return true;
   }
 
   /**
-   * Execute take-profit sell
+   * Execute take-profit sell and record to DB
    */
-  async function executeTakeProfit(currentPrice: number): Promise<void> {
+  async function executeTakeProfit(currentPrice: number): Promise<boolean> {
     const baseValueUsd = state.tokenBalance * currentPrice;
     const sellValueUsd = baseValueUsd * (acc.takeProfitSellPercent / 100);
     
     if (sellValueUsd < limits.minTradeUsd) {
       logger.debug(`Take-profit sell $${sellValueUsd.toFixed(2)} below minimum`);
-      return;
+      return false;
     }
 
     if (config.dryRun) {
       logger.info(`[DRY RUN] Would SELL $${sellValueUsd.toFixed(2)} of ${pair.base} (take-profit)`);
-      return;
+      return true;
     }
 
     logger.info(`Executing take-profit: SELL $${sellValueUsd.toFixed(2)} of ${pair.base}`);
     
     const trade = await bankr.sell(pair.base, sellValueUsd, pair.baseAddress);
     
-    // Update state - reduce token balance
+    // Update local state
     if (trade.baseAmount) {
       state.tokenBalance -= trade.baseAmount;
     }
+    state.recentHigh = currentPrice;
+    state.recentHighTime = new Date();
 
-    logger.info(`Take-profit SELL executed`, {
+    // Record trade and update state atomically in DB
+    await recordTradeWithStateUpdate(jobId, {
+      side: 'SELL',
+      reason: 'TAKE_PROFIT',
+      baseAmount: trade.baseAmount || 0,
+      quoteAmount: sellValueUsd,
+      priceUsd: currentPrice,
+      txHash: trade.txHash,
+    }, {
+      tokenBalance: state.tokenBalance,
+      recentHigh: currentPrice,
+      recentHighTime: new Date(),
+    });
+
+    logger.info(`Take-profit SELL executed and saved to DB`, {
       amount: sellValueUsd,
       token: pair.base,
       price: currentPrice,
-      gainPercent: acc.takeProfitPercent,
+      tokenBalance: state.tokenBalance,
     });
 
-    // Reset recent high after taking profit (so we can detect next pump)
-    state.recentHigh = currentPrice;
-    state.recentHighTime = new Date();
+    return true;
   }
 
   return {
@@ -192,7 +268,6 @@ export function createAccumulateEngine(
         logger.info('Accumulate tick starting...');
         
         // 1. Get current price from DexScreener (fast, no Bankr API needed)
-        logger.debug('Fetching price from DexScreener...');
         let priceData: PriceData;
         if (pair.baseAddress) {
           priceData = await getTokenPrice(pair.baseAddress, pair.chain);
@@ -204,10 +279,15 @@ export function createAccumulateEngine(
         logger.info(`Price: $${currentPrice.toFixed(10)} | Recent high: $${state.recentHigh.toFixed(10)}`);
 
         // 2. Update recent high tracking
+        const prevHigh = state.recentHigh;
         updateRecentHigh(currentPrice);
+        
+        // Save if recent high changed
+        if (state.recentHigh !== prevHigh) {
+          await saveState();
+        }
 
         // 3. Get quote balance (ETH) for checking if we can buy
-        // Only call Bankr for quote balance, not base (avoid flagged token issues)
         logger.info('Fetching quote balance from Bankr...');
         const quoteBalance = await bankr.getBalance(pair.quote, pair.quoteAddress);
         logger.info(`Quote balance received: ${quoteBalance}`);
@@ -217,7 +297,7 @@ export function createAccumulateEngine(
         const ethPriceUsd = 3000; 
         const quoteBalanceUsd = quoteBalance * ethPriceUsd;
         
-        logger.debug(`Quote balance: ${quoteBalance.toFixed(6)} ${pair.quote} (~$${quoteBalanceUsd.toFixed(2)}) | Token balance (tracked): ${state.tokenBalance.toFixed(2)}`);
+        logger.debug(`Quote balance: ${quoteBalance.toFixed(6)} ${pair.quote} (~$${quoteBalanceUsd.toFixed(2)}) | Token balance: ${state.tokenBalance.toFixed(2)}`);
 
         // 4. Check take-profit first (before buying more)
         if (shouldTakeProfit(currentPrice)) {
@@ -229,11 +309,13 @@ export function createAccumulateEngine(
         if (isDip(currentPrice)) {
           const dipAmount = acc.dcaAmount * acc.dipBuyMultiplier;
           logger.info(`Dip detected! Price down ${acc.dipBuyThreshold}%+ from recent high`);
-          await executeBuy(dipAmount, 'DIP_BUY', currentPrice, quoteBalanceUsd);
           
-          // Reset recent high after dip buy so we track from new level
-          state.recentHigh = currentPrice;
-          state.recentHighTime = new Date();
+          if (await executeBuy(dipAmount, 'DIP_BUY', currentPrice, quoteBalanceUsd)) {
+            // Reset recent high after dip buy
+            state.recentHigh = currentPrice;
+            state.recentHighTime = new Date();
+            await saveState();
+          }
           return;
         }
 
@@ -253,8 +335,8 @@ export function createAccumulateEngine(
       return { ...state };
     },
 
-    setState(newState: Partial<AccumulateState>): void {
-      Object.assign(state, newState);
+    getJobId(): string {
+      return jobId;
     },
   };
 }
