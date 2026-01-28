@@ -211,6 +211,62 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * Parse transaction hash from Bankr response
+ * Handles formats like:
+ * - "tx on base: https://basescan.org/tx/0xef0617..."
+ * - "transaction: 0xef0617..."
+ */
+function parseTxHash(response: string): string | undefined {
+  // Look for basescan/etherscan URL with tx hash
+  const urlMatch = response.match(/https?:\/\/[a-z]+scan\.org\/tx\/(0x[a-fA-F0-9]{64})/i);
+  if (urlMatch) {
+    return urlMatch[1];
+  }
+  
+  // Look for standalone tx hash
+  const hashMatch = response.match(/(?:tx|transaction)[:\s]+(0x[a-fA-F0-9]{64})/i);
+  if (hashMatch) {
+    return hashMatch[1];
+  }
+  
+  // Look for any 0x hash that looks like a tx hash (64 hex chars)
+  const anyHashMatch = response.match(/\b(0x[a-fA-F0-9]{64})\b/);
+  if (anyHashMatch) {
+    return anyHashMatch[1];
+  }
+  
+  return undefined;
+}
+
+/**
+ * Parse token amount received from Bankr swap response
+ * Handles formats like:
+ * - "swapped 0.000325 ETH to 1165474.567985852751959103 CLAWDIA"
+ * - "bought 1165474 TOKEN"
+ * - "received 1165474.56 tokens"
+ */
+function parseSwapAmount(response: string): { tokenAmount?: number; quoteAmount?: number } {
+  const result: { tokenAmount?: number; quoteAmount?: number } = {};
+  
+  // Pattern: "swapped X ETH to Y TOKEN" or "swapped X ETH for Y TOKEN"
+  const swapMatch = response.match(/swapped\s+([0-9.]+)\s+\w+\s+(?:to|for)\s+([0-9.]+)/i);
+  if (swapMatch) {
+    result.quoteAmount = parseFloat(swapMatch[1]);
+    result.tokenAmount = parseFloat(swapMatch[2]);
+    return result;
+  }
+  
+  // Pattern: "bought X TOKEN" or "received X TOKEN"
+  const boughtMatch = response.match(/(?:bought|received)\s+([0-9,]+\.?[0-9]*)\s+\w+/i);
+  if (boughtMatch) {
+    result.tokenAmount = parseFloat(boughtMatch[1].replace(/,/g, ''));
+    return result;
+  }
+  
+  return result;
+}
+
+/**
  * Create a Bankr client
  */
 export function createBankrClient(options: BankrClientOptions): BankrClient {
@@ -312,19 +368,33 @@ export function createBankrClient(options: BankrClientOptions): BankrClient {
       logger.info(`Executing Bankr buy: ${prompt}`);
       
       const response = await executeBankrPrompt(prompt, bankrConfig!);
-      logger.info(`Bankr buy response: ${response.slice(0, 200)}`);
+      logger.info(`Bankr buy response: ${response}`);
       
-      // Parse what we can from the response
+      // Parse transaction hash
+      const txHash = parseTxHash(response);
+      if (txHash) {
+        logger.info(`Parsed TX hash: ${txHash}`);
+      }
+      
+      // Parse swap amounts
+      const swapAmounts = parseSwapAmount(response);
+      const tokenAmount = swapAmounts.tokenAmount || 0;
+      if (tokenAmount > 0) {
+        logger.info(`Parsed token amount: ${tokenAmount}`);
+      }
+      
+      // Try to parse price (for logging/reference)
       const price = parsePrice(response);
       
       return {
         id: tradeId,
         side: 'buy',
-        baseAmount: price ? amountUsd / price : 0,
+        baseAmount: tokenAmount,
         quoteAmount: amountUsd,
         price: price || 0,
         timestamp: new Date(),
         status: 'executed',
+        txHash,
       };
     },
 
@@ -355,18 +425,33 @@ export function createBankrClient(options: BankrClientOptions): BankrClient {
       logger.info(`Executing Bankr sell: ${prompt}`);
       
       const response = await executeBankrPrompt(prompt, bankrConfig!);
-      logger.info(`Bankr sell response: ${response.slice(0, 200)}`);
+      logger.info(`Bankr sell response: ${response}`);
       
+      // Parse transaction hash
+      const txHash = parseTxHash(response);
+      if (txHash) {
+        logger.info(`Parsed TX hash: ${txHash}`);
+      }
+      
+      // Parse swap amounts (for sells, tokenAmount is what was sold)
+      const swapAmounts = parseSwapAmount(response);
+      const tokenAmount = swapAmounts.tokenAmount || 0;
+      if (tokenAmount > 0) {
+        logger.info(`Parsed token amount sold: ${tokenAmount}`);
+      }
+      
+      // Try to parse price (for logging/reference)
       const price = parsePrice(response);
       
       return {
         id: tradeId,
         side: 'sell',
-        baseAmount: price ? amountUsd / price : 0,
+        baseAmount: tokenAmount,
         quoteAmount: amountUsd,
         price: price || 0,
         timestamp: new Date(),
         status: 'executed',
+        txHash,
       };
     },
 

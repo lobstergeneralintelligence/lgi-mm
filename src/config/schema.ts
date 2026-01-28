@@ -41,12 +41,12 @@ const notificationsSchema = z.object({
  */
 const accumulateSchema = z.object({
   dcaAmount: z.number().min(1).default(10),                    // USD per DCA buy
-  dcaIntervalHours: z.number().min(0.5).max(168).default(4),   // 30min to 1 week
+  dcaIntervalHours: z.number().min(0.01).max(168).default(4),  // ~36s to 1 week (relaxed for testing)
   dipBuyThreshold: z.number().min(1).max(50).default(5),       // % drop to trigger dip buy
   dipBuyMultiplier: z.number().min(1).max(5).default(2),       // Multiply DCA amount on dips
   takeProfitPercent: z.number().min(0).max(100).default(0),    // 0 = disabled
   takeProfitSellPercent: z.number().min(1).max(50).default(10), // % of holdings to sell
-  maxAccumulationUsd: z.number().min(10).default(1000),        // Stop accumulating at this
+  maxAccumulationUsd: z.number().min(1).default(1000),         // Stop accumulating at this (relaxed for testing)
 });
 
 /**
