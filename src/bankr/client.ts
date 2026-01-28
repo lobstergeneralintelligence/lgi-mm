@@ -172,10 +172,16 @@ function parsePrice(response: string): number | null {
 
 /**
  * Parse a balance from natural language response
+ * Handles Bankr formats like:
+ * - "ETH - 0.002732388974206735 ($8.30)"
+ * - "Token (0xbbd9...) - 1260425.075644998881241559 on Base"
  */
 function parseBalance(response: string, token: string): number | null {
-  // Look for balance patterns
+  // Look for balance patterns - order matters, most specific first
   const patterns = [
+    // Bankr format: "TOKEN - NUMBER" or "Token (0x...) - NUMBER"
+    /[-–]\s*([0-9,]+\.?[0-9]*)/,
+    // Standard formats
     new RegExp(`([0-9,]+\\.?[0-9]*)\\s*${token}`, 'i'),
     new RegExp(`${token}:?\\s*([0-9,]+\\.?[0-9]*)`, 'i'),
     /balance:?\s*\$?([0-9,]+\.?[0-9]*)/i,
