@@ -12,7 +12,7 @@
  */
 
 import { logger } from '../utils/logger.js';
-import { announceBuy } from '../utils/announce.js';
+import { createAnnouncer, type Announcer } from '../utils/announce.js';
 import { getTokenPrice } from '../price/dexscreener.js';
 import { 
   updateAccumulateState, 
@@ -68,6 +68,9 @@ export function createAccumulateEngine(
   // Trade lock to prevent concurrent tick execution
   // (Bankr API is slow, ticks can overlap without this)
   let tickLock = false;
+
+  // Initialize announcer (null if disabled)
+  const announcer: Announcer = createAnnouncer(config.announcements);
 
   logger.info('Accumulate engine initialized from DB state', {
     jobId,
@@ -223,19 +226,20 @@ export function createAccumulateEngine(
       tokenBalance: state.tokenBalance,
     });
 
-    // Announce to Telegram
-    await announceBuy({
-      token: pair.base,
-      tokenAddress: pair.baseAddress || '',
-      chain: pair.chain,
-      amountUsd: amount,
-      tokensReceived: trade.baseAmount || 0,
-      price: currentPrice,
-      totalAccumulated: state.totalAccumulated,
-      maxBudget: acc.maxAccumulationUsd,
-      reason,
-      txHash: trade.txHash,
-    });
+    // Announce to Telegram (if configured)
+    if (announcer) {
+      await announcer.announceBuy({
+        token: pair.base,
+        chain: pair.chain,
+        amountUsd: amount,
+        tokensReceived: trade.baseAmount || 0,
+        price: currentPrice,
+        totalAccumulated: state.totalAccumulated,
+        maxBudget: acc.maxAccumulationUsd,
+        reason,
+        txHash: trade.txHash,
+      });
+    }
 
     return true;
   }

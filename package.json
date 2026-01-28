@@ -14,7 +14,9 @@
     "clean": "rm -rf dist/",
     "mm:start": "tsx src/index.ts",
     "mm:status": "tsx src/cli/status.ts",
-    "mm:stop": "tsx src/cli/stop.ts"
+    "mm:stop": "tsx src/cli/stop.ts",
+    "mm:pause": "tsx src/cli/pause.ts",
+    "mm:reset": "tsx src/cli/reset.ts"
   },
   "keywords": [
     "clawdbot",

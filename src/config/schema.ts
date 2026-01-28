@@ -39,6 +39,17 @@ const notificationsSchema = z.object({
 });
 
 /**
+ * Announcement config - broadcast trades to external channels
+ */
+const announcementsSchema = z.object({
+  enabled: z.boolean().default(false),
+  telegram: z.object({
+    chatId: z.string().optional(),  // @channel or numeric chat ID
+    botTokenPath: z.string().optional(),  // Path to bot token JSON (default: ~/.clawdbot/secrets/telegram-lgi.json)
+  }).optional(),
+});
+
+/**
  * Accumulate mode - DCA + dip buying
  */
 const accumulateSchema = z.object({
@@ -67,6 +78,7 @@ export const configSchema = z.object({
   strategy: strategySchema,
   limits: limitsSchema,
   notifications: notificationsSchema.default({}),
+  announcements: announcementsSchema.default({}),
   accumulate: accumulateSchema.optional(),
   liquidity: liquiditySchema.optional(),
   dryRun: z.boolean().default(false),

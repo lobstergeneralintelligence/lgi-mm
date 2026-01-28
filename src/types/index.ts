@@ -57,12 +57,21 @@ export interface NotificationConfig {
   onRebalance: boolean;
 }
 
+export interface AnnouncementsConfig {
+  enabled: boolean;
+  telegram?: {
+    chatId?: string;        // @channel or numeric ID
+    botTokenPath?: string;  // Path to token JSON file
+  };
+}
+
 export interface Config {
   mode: OperatingMode;         // 'liquidity' or 'accumulate'
   pair: TokenPair;
   strategy: StrategyConfig;
   limits: Limits;
   notifications: NotificationConfig;
+  announcements: AnnouncementsConfig;
   accumulate?: AccumulateConfig;  // Required if mode = 'accumulate'
   liquidity?: LiquidityConfig;    // Required if mode = 'liquidity'
   dryRun?: boolean;            // If true, log decisions but don't execute
