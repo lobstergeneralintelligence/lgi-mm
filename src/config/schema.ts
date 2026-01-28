@@ -18,7 +18,7 @@ const strategySchema = z.object({
   spreadPercent: z.number().min(0.1).max(50).default(2.0),
   positionSize: z.number().min(1).default(100),
   rebalanceThreshold: z.number().min(1).max(100).default(10),
-  tickIntervalSeconds: z.number().min(5).max(300).default(10), // How often to check prices
+  tickIntervalSeconds: z.number().min(1).max(300).default(5), // How often to check prices (1s = 60/min, limit is 300)
 });
 
 const limitsSchema = z.object({

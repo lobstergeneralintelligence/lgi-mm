@@ -9,7 +9,7 @@
     "spreadPercent": 5.0,
     "positionSize": 25,
     "rebalanceThreshold": 20,
-    "tickIntervalSeconds": 10
+    "tickIntervalSeconds": 1
   },
   "limits": {
     "maxPositionUsd": 200,
