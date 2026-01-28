@@ -1,0 +1,139 @@
+// LGI-MM Database Schema
+// Supports both accumulate and liquidity modes
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// Job - One per token/position
+// ============================================================
+model Job {
+  id              String    @id @default(uuid())
+  
+  // Token identification
+  tokenAddress    String    @unique
+  tokenSymbol     String
+  chain           String    @default("base")
+  quoteToken      String    @default("ETH")
+  
+  // Operating mode and status
+  mode            JobMode   @default(ACCUMULATE)
+  status          JobStatus @default(IDLE)
+  
+  // === Accumulate mode state ===
+  lastDcaBuyTime  DateTime?
+  recentHigh      Float     @default(0)
+  recentHighTime  DateTime?
+  totalAccumulated Float    @default(0)  // USD spent buying
+  tokenBalance    Float     @default(0)  // Tokens held (tracked locally)
+  avgBuyPrice     Float     @default(0)  // Average price paid
+  
+  // === Liquidity mode state ===
+  lastRebalanceTime DateTime?
+  dailyVolumeUsd    Float   @default(0)
+  dailyVolumeResetAt DateTime?
+  
+  // Configuration stored as JSON for flexibility
+  // Contains mode-specific settings (dcaAmount, spreadPercent, etc.)
+  config          Json
+  
+  // Error tracking
+  lastError       String?
+  errorCount      Int       @default(0)
+  
+  // Timestamps
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  startedAt       DateTime?
+  pausedAt        DateTime?
+  
+  // Relations
+  trades          Trade[]
+  
+  @@index([status])
+  @@index([chain, status])
+}
+
+// ============================================================
+// Trade - History of all trades
+// ============================================================
+model Trade {
+  id              String      @id @default(uuid())
+  jobId           String
+  job             Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  
+  // Trade details
+  side            TradeSide
+  reason          TradeReason
+  
+  // Amounts
+  baseAmount      Float       // Token amount
+  quoteAmount     Float       // ETH/USDC amount
+  priceUsd        Float       // Price at execution
+  
+  // Execution details
+  txHash          String?
+  status          TradeStatus @default(PENDING)
+  error           String?
+  
+  // Gas tracking (optional)
+  gasUsed         Float?
+  gasPriceGwei    Float?
+  
+  // Timestamps
+  createdAt       DateTime    @default(now())
+  executedAt      DateTime?
+  
+  @@index([jobId, createdAt])
+  @@index([status])
+}
+
+// ============================================================
+// Enums
+// ============================================================
+enum JobMode {
+  ACCUMULATE    // DCA + dip buying
+  LIQUIDITY     // Market making for token owners
+}
+
+enum JobStatus {
+  IDLE          // No position, not running
+  RUNNING       // Actively trading
+  PAUSED        // Stopped but keeping position
+  LIQUIDATING   // Selling all to return to idle
+  ERROR         // Stopped due to error, needs attention
+}
+
+enum TradeSide {
+  BUY
+  SELL
+}
+
+enum TradeReason {
+  // Accumulate mode
+  DCA           // Regular scheduled buy
+  DIP_BUY       // Extra buy on price dip
+  TAKE_PROFIT   // Sell on pump
+  
+  // Liquidity mode
+  REBALANCE     // Position rebalancing
+  SPREAD_BUY    // Market making buy
+  SPREAD_SELL   // Market making sell
+  
+  // Both modes
+  LIQUIDATE     // Selling all to exit
+  MANUAL        // Manual intervention
+}
+
+enum TradeStatus {
+  PENDING       // Created, not yet executed
+  SUBMITTED     // Sent to Bankr
+  EXECUTED      // Confirmed on chain
+  FAILED        // Execution failed
+}

@@ -1,0 +1,31 @@
+# LGI-MM Database
+# Copy this to docker-compose.yml and set your own POSTGRES_PASSWORD
+#
+# Usage:
+#   cp docker-compose.example.yml docker-compose.yml
+#   # Edit docker-compose.yml with your password
+#   docker-compose up -d
+
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: lgi-mm-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: lgi
+      POSTGRES_PASSWORD: CHANGE_ME_TO_SECURE_PASSWORD
+      POSTGRES_DB: lgi_mm
+    volumes:
+      - lgi_mm_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"  # Only localhost, not exposed externally
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lgi -d lgi_mm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  lgi_mm_data:

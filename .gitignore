@@ -11,11 +11,15 @@ secrets.json
 *.key
 *.pem
 
+# Docker (real config has passwords)
+docker-compose.yml
+!docker-compose.example.yml
+
 # Environment
 .env
-.env.*
 .env.local
 .env.production
+!.env.example
 
 # Credentials
 credentials.json
