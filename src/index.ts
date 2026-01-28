@@ -41,11 +41,15 @@ async function main(): Promise<void> {
     }
 
     logger.info('Configuration loaded', {
+      mode: config.mode,
       pair: `${config.pair.base}/${config.pair.quote}`,
       chain: config.pair.chain,
-      spread: `${config.strategy.spreadPercent}%`,
-      positionSize: config.strategy.positionSize,
+      tickInterval: `${config.strategy.tickIntervalSeconds}s`,
       dryRun: config.dryRun,
+      ...(config.mode === 'accumulate' && config.accumulate ? {
+        dcaAmount: `$${config.accumulate.dcaAmount}`,
+        dcaInterval: `${config.accumulate.dcaIntervalHours}h`,
+      } : {}),
     });
 
     // Create Bankr client

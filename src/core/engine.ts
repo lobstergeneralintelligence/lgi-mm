@@ -1,23 +1,22 @@
 /**
  * Market Maker Engine
  * 
- * The core decision-making loop:
- * 1. Get current price
- * 2. Calculate where our bids/asks should be
- * 3. Check if we should trade
- * 4. Execute if conditions met
- * 5. Track position, rebalance if needed
+ * Dispatches to the correct mode-specific engine:
+ * - accumulate: DCA + dip buying
+ * - liquidity: market making for token owners
  */
 
 import { logger } from '../utils/logger.js';
 import { getTokenPrice } from '../price/dexscreener.js';
+import { createAccumulateEngine, type AccumulateEngine } from './accumulate.js';
 import type { BankrClient } from '../bankr/client.js';
-import type { Config, MarketMakerState, PriceData, Trade, Position } from '../types/index.js';
+import type { Config, MarketMakerState, PriceData, Trade, Position, AccumulateState } from '../types/index.js';
 
 export interface MarketMakerEngine {
   start(): Promise<void>;
   stop(): void;
   getState(): MarketMakerState;
+  getAccumulateState(): AccumulateState | undefined;
 }
 
 interface PriceLevel {
@@ -76,15 +75,30 @@ export function createEngine(config: Config, bankr: BankrClient): MarketMakerEng
     errors: [],
   };
 
+  // Mode-specific engines
+  let accumulateEngine: AccumulateEngine | null = null;
+  
+  if (config.mode === 'accumulate') {
+    accumulateEngine = createAccumulateEngine(config, bankr);
+  }
+
   // Track recent prices for trend detection (optional enhancement)
   const priceHistory: number[] = [];
   const MAX_PRICE_HISTORY = 10;
 
   /**
    * Main decision loop - runs on each tick
+   * Dispatches to mode-specific engine
    */
   async function tick(): Promise<void> {
     try {
+      // Dispatch to mode-specific engine
+      if (config.mode === 'accumulate' && accumulateEngine) {
+        await accumulateEngine.tick();
+        return;
+      }
+
+      // Liquidity mode (default/legacy behavior)
       // 1. Get current price
       // Use DexScreener if we have a contract address (fast!), otherwise fall back to Bankr
       let priceData: PriceData;
@@ -117,7 +131,7 @@ export function createEngine(config: Config, bankr: BankrClient): MarketMakerEng
       }
 
       // 5. Check if we need to rebalance
-      const targetRatio = 0.5; // 50/50 split between base and quote
+      const targetRatio = config.liquidity?.targetRatio ?? 0.5;
       const rebalanceAction = needsRebalance(position, targetRatio, strategy.rebalanceThreshold);
 
       if (rebalanceAction) {
@@ -235,11 +249,16 @@ export function createEngine(config: Config, bankr: BankrClient): MarketMakerEng
       }
 
       logger.info('🦞 Starting market maker', {
+        mode: config.mode,
         pair: `${pair.base}/${pair.quote}`,
         chain: pair.chain,
-        spread: `${strategy.spreadPercent}%`,
         tickInterval: `${strategy.tickIntervalSeconds}s`,
         dryRun: config.dryRun,
+        ...(config.mode === 'accumulate' && config.accumulate ? {
+          dcaAmount: `$${config.accumulate.dcaAmount}`,
+          dcaInterval: `${config.accumulate.dcaIntervalHours}h`,
+          dipThreshold: `${config.accumulate.dipBuyThreshold}%`,
+        } : {}),
       });
 
       isRunning = true;
@@ -294,6 +313,10 @@ export function createEngine(config: Config, bankr: BankrClient): MarketMakerEng
 
     getState(): MarketMakerState {
       return { ...state };
+    },
+
+    getAccumulateState(): AccumulateState | undefined {
+      return accumulateEngine?.getState();
     },
   };
 }
