@@ -1,0 +1,24 @@
+{
+  "pair": {
+    "base": "CLAWDIA",
+    "quote": "ETH",
+    "chain": "base"
+  },
+  "strategy": {
+    "spreadPercent": 3.0,
+    "positionSize": 50,
+    "rebalanceThreshold": 15
+  },
+  "limits": {
+    "maxPositionUsd": 500,
+    "minTradeUsd": 10,
+    "maxTradesPerHour": 10
+  },
+  "notifications": {
+    "enabled": true,
+    "onTrade": true,
+    "onError": true,
+    "onRebalance": true
+  },
+  "dryRun": true
+}

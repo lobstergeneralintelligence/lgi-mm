@@ -1,0 +1,43 @@
+{
+  "name": "lgi-mm",
+  "version": "0.1.0",
+  "description": "Autonomous market making skill for Clawdbot",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist/",
+    "mm:start": "tsx src/index.ts",
+    "mm:status": "tsx src/cli/status.ts",
+    "mm:stop": "tsx src/cli/stop.ts"
+  },
+  "keywords": [
+    "clawdbot",
+    "market-maker",
+    "trading",
+    "bankr",
+    "defi"
+  ],
+  "author": "Lobster General Intelligence",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lobstergeneralintelligence/lgi-mm.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
