@@ -10,6 +10,7 @@
  */
 
 import { logger } from '../utils/logger.js';
+import { getTokenPrice } from '../price/dexscreener.js';
 import type { BankrClient } from '../bankr/client.js';
 import type { Config, MarketMakerState, PriceData, Trade, Position } from '../types/index.js';
 
@@ -84,8 +85,14 @@ export function createEngine(config: Config, bankr: BankrClient): MarketMakerEng
    */
   async function tick(): Promise<void> {
     try {
-      // 1. Get current price (use contract address if available)
-      const priceData = await bankr.getPrice(pair.base, pair.quote, pair.baseAddress);
+      // 1. Get current price
+      // Use DexScreener if we have a contract address (fast!), otherwise fall back to Bankr
+      let priceData: PriceData;
+      if (pair.baseAddress) {
+        priceData = await getTokenPrice(pair.baseAddress, pair.chain);
+      } else {
+        priceData = await bankr.getPrice(pair.base, pair.quote, pair.baseAddress);
+      }
       state.lastPrice = priceData;
       
       // Track price history
@@ -242,8 +249,8 @@ export function createEngine(config: Config, bankr: BankrClient): MarketMakerEng
       // Run initial tick
       await tick();
 
-      // Set up main loop (every 3 minutes - Bankr needs ~60-80s per query)
-      const TICK_INTERVAL_MS = 180_000;
+      // Set up main loop (every 30 seconds - DexScreener is fast!)
+      const TICK_INTERVAL_MS = 30_000;
       loopInterval = setInterval(() => {
         tick().catch((err) => {
           logger.error(`Tick failed: ${err}`);
