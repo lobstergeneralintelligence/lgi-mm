@@ -67,13 +67,28 @@ function loadBankrConfig(): BankrConfig {
   throw new Error('Bankr config not found. Install and configure the bankr skill first.');
 }
 
+// Timeout constants
+const BALANCE_TIMEOUT_MS = 90_000;   // 90s for balance checks
+const TRADE_TIMEOUT_MS = 180_000;    // 180s for trades (they're slower)
+const MAX_RETRIES = 2;               // Retry twice on timeout
+const RETRY_DELAY_MS = 5_000;        // 5s between retries
+
+/**
+ * Sleep helper
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 /**
  * Submit a prompt to Bankr and wait for completion
+ * Now with retry logic for transient failures
  */
 async function executeBankrPrompt(
   prompt: string,
   config: BankrConfig,
-  maxWaitMs: number = 120_000
+  maxWaitMs: number = BALANCE_TIMEOUT_MS,
+  retries: number = MAX_RETRIES
 ): Promise<string> {
   logger.debug(`Bankr prompt: ${prompt}`);
 
@@ -140,7 +155,14 @@ async function executeBankrPrompt(
     }
   }
 
-  throw new Error(`Bankr job timed out after ${maxWaitMs}ms`);
+  // Timeout - retry if we have retries left
+  if (retries > 0) {
+    logger.warn(`Bankr job timed out after ${maxWaitMs}ms, retrying... (${retries} retries left)`);
+    await sleep(RETRY_DELAY_MS);
+    return executeBankrPrompt(prompt, config, maxWaitMs, retries - 1);
+  }
+
+  throw new Error(`Bankr job timed out after ${maxWaitMs}ms (no retries left)`);
 }
 
 /**
@@ -204,10 +226,6 @@ function parseBalance(response: string, token: string): number | null {
   }
 
   return null;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
@@ -367,7 +385,8 @@ export function createBankrClient(options: BankrClientOptions): BankrClient {
       const prompt = `Buy $${amountUsd} worth of ${tokenRef} on ${chain}`;
       logger.info(`Executing Bankr buy: ${prompt}`);
       
-      const response = await executeBankrPrompt(prompt, bankrConfig!);
+      // Use longer timeout for trades (they're slower than balance checks)
+      const response = await executeBankrPrompt(prompt, bankrConfig!, TRADE_TIMEOUT_MS);
       logger.info(`Bankr buy response: ${response}`);
       
       // Parse transaction hash
@@ -424,7 +443,8 @@ export function createBankrClient(options: BankrClientOptions): BankrClient {
       const prompt = `Sell $${amountUsd} worth of ${tokenRef} on ${chain}`;
       logger.info(`Executing Bankr sell: ${prompt}`);
       
-      const response = await executeBankrPrompt(prompt, bankrConfig!);
+      // Use longer timeout for trades (they're slower than balance checks)
+      const response = await executeBankrPrompt(prompt, bankrConfig!, TRADE_TIMEOUT_MS);
       logger.info(`Bankr sell response: ${response}`);
       
       // Parse transaction hash

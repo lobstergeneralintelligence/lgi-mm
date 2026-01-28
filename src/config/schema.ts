@@ -20,7 +20,9 @@ const strategySchema = z.object({
   spreadPercent: z.number().min(0.1).max(50).default(2.0),
   positionSize: z.number().min(1).default(100),
   rebalanceThreshold: z.number().min(1).max(100).default(10),
-  tickIntervalSeconds: z.number().min(30).max(3600).default(60), // How often to check (30s - 1hr)
+  // Tick interval: Bankr API is slow (~30-60s per call), so don't tick too often
+  // Balance check + trade can take 2-3 minutes total
+  tickIntervalSeconds: z.number().min(60).max(3600).default(120),
 });
 
 const limitsSchema = z.object({
