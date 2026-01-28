@@ -1,0 +1,23 @@
+{
+  "pair": {
+    "base": "ETH",
+    "quote": "USDC",
+    "chain": "base"
+  },
+  "strategy": {
+    "spreadPercent": 2.0,
+    "positionSize": 100,
+    "rebalanceThreshold": 10
+  },
+  "limits": {
+    "maxPositionUsd": 1000,
+    "minTradeUsd": 10,
+    "maxTradesPerHour": 20
+  },
+  "notifications": {
+    "enabled": false,
+    "onTrade": true,
+    "onError": true,
+    "onRebalance": true
+  }
+}
