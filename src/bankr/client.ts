@@ -4,10 +4,14 @@
  * Bankr is a natural language trading API. This client wraps
  * the interaction patterns we need for market making.
  * 
- * In Clawdbot context, these calls go through the agent.
- * For standalone testing, we use simulation mode.
+ * API Flow:
+ * 1. POST /agent/prompt → get jobId
+ * 2. Poll GET /agent/job/{id} until completed
+ * 3. Parse natural language response
  */
 
+import { readFileSync, existsSync } from 'fs';
+import { join } from 'path';
 import { logger } from '../utils/logger.js';
 import type { Chain, PriceData, Position, Trade } from '../types/index.js';
 
@@ -24,38 +28,175 @@ export interface BankrClient {
   getPosition(baseToken: string, quoteToken: string): Promise<Position>;
 }
 
-/**
- * Execute a Bankr command through the skill
- * In live mode, this interacts with the actual Bankr service
- */
-async function executeBankrCommand(command: string, mode: 'live' | 'simulation'): Promise<string> {
-  logger.debug(`Bankr command: ${command}`, { mode });
+interface BankrConfig {
+  apiKey: string;
+  apiUrl: string;
+}
 
-  if (mode === 'simulation') {
-    // In simulation mode, we return mock responses
-    logger.info(`[SIMULATION] Would execute: ${command}`);
-    return 'SIMULATED';
+interface JobResponse {
+  success: boolean;
+  jobId: string;
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
+  response?: string;
+  error?: string;
+}
+
+/**
+ * Load Bankr API configuration
+ */
+function loadBankrConfig(): BankrConfig {
+  const paths = [
+    join(process.env.HOME || '', '.clawdbot', 'skills', 'bankr', 'config.json'),
+  ];
+
+  for (const path of paths) {
+    if (existsSync(path)) {
+      try {
+        const content = readFileSync(path, 'utf-8');
+        const config = JSON.parse(content);
+        return {
+          apiKey: config.apiKey || '',
+          apiUrl: config.apiUrl || 'https://api.bankr.bot',
+        };
+      } catch (err) {
+        logger.warn(`Failed to read Bankr config from ${path}: ${err}`);
+      }
+    }
   }
 
-  // In live mode, we need to interface with Bankr
-  // This would typically go through Clawdbot's skill system
-  // For now, we'll use a placeholder that can be wired up
-  try {
-    // The actual implementation would invoke Bankr through Clawdbot
-    // For standalone testing, we can use environment-based config
-    const bankrEndpoint = process.env.BANKR_ENDPOINT;
-    
-    if (!bankrEndpoint) {
-      throw new Error('BANKR_ENDPOINT not configured. Set it or use simulation mode.');
+  throw new Error('Bankr config not found. Install and configure the bankr skill first.');
+}
+
+/**
+ * Submit a prompt to Bankr and wait for completion
+ */
+async function executeBankrPrompt(
+  prompt: string,
+  config: BankrConfig,
+  maxWaitMs: number = 120_000
+): Promise<string> {
+  logger.debug(`Bankr prompt: ${prompt}`);
+
+  // Submit the prompt
+  const submitResponse = await fetch(`${config.apiUrl}/agent/prompt`, {
+    method: 'POST',
+    headers: {
+      'X-API-Key': config.apiKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ prompt }),
+  });
+
+  if (!submitResponse.ok) {
+    throw new Error(`Bankr submit failed: ${submitResponse.status} ${submitResponse.statusText}`);
+  }
+
+  const submitResult = await submitResponse.json() as JobResponse;
+  
+  if (!submitResult.success || !submitResult.jobId) {
+    throw new Error(`Bankr submit failed: ${JSON.stringify(submitResult)}`);
+  }
+
+  const jobId = submitResult.jobId;
+  logger.debug(`Bankr job submitted: ${jobId}`);
+
+  // Poll for completion
+  const startTime = Date.now();
+  const pollIntervalMs = 2000;
+
+  while (Date.now() - startTime < maxWaitMs) {
+    await sleep(pollIntervalMs);
+
+    const statusResponse = await fetch(`${config.apiUrl}/agent/job/${jobId}`, {
+      headers: {
+        'X-API-Key': config.apiKey,
+      },
+    });
+
+    if (!statusResponse.ok) {
+      throw new Error(`Bankr status check failed: ${statusResponse.status}`);
     }
 
-    // Placeholder for actual Bankr API call
-    // This will be implemented based on Bankr's actual interface
-    throw new Error('Live Bankr integration not yet implemented');
-  } catch (err) {
-    logger.error(`Bankr command failed: ${err}`);
-    throw err;
+    const statusResult = await statusResponse.json() as JobResponse;
+
+    switch (statusResult.status) {
+      case 'completed':
+        logger.debug(`Bankr job completed in ${Date.now() - startTime}ms`);
+        return statusResult.response || '';
+      
+      case 'failed':
+        throw new Error(`Bankr job failed: ${statusResult.error || 'Unknown error'}`);
+      
+      case 'cancelled':
+        throw new Error('Bankr job was cancelled');
+      
+      case 'pending':
+      case 'processing':
+        // Continue polling
+        break;
+      
+      default:
+        logger.warn(`Unknown Bankr status: ${statusResult.status}`);
+    }
   }
+
+  throw new Error(`Bankr job timed out after ${maxWaitMs}ms`);
+}
+
+/**
+ * Parse a price from natural language response
+ * Handles formats like "$3,032.65", "3032.65", "$0.00001234"
+ */
+function parsePrice(response: string): number | null {
+  // Look for price patterns
+  const patterns = [
+    /\$([0-9,]+\.?[0-9]*)/,           // $3,032.65
+    /price:?\s*\$?([0-9,]+\.?[0-9]*)/i, // price: $3032.65
+    /trading at \$?([0-9,]+\.?[0-9]*)/i, // trading at $3032.65
+    /([0-9,]+\.?[0-9]*)\s*(?:USD|USDC)/i, // 3032.65 USD
+  ];
+
+  for (const pattern of patterns) {
+    const match = response.match(pattern);
+    if (match) {
+      const numStr = match[1].replace(/,/g, '');
+      const num = parseFloat(numStr);
+      if (!isNaN(num) && num > 0) {
+        return num;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Parse a balance from natural language response
+ */
+function parseBalance(response: string, token: string): number | null {
+  // Look for balance patterns
+  const patterns = [
+    new RegExp(`([0-9,]+\\.?[0-9]*)\\s*${token}`, 'i'),
+    new RegExp(`${token}:?\\s*([0-9,]+\\.?[0-9]*)`, 'i'),
+    /balance:?\s*\$?([0-9,]+\.?[0-9]*)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = response.match(pattern);
+    if (match) {
+      const numStr = match[1].replace(/,/g, '');
+      const num = parseFloat(numStr);
+      if (!isNaN(num)) {
+        return num;
+      }
+    }
+  }
+
+  return null;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
@@ -65,6 +206,18 @@ export function createBankrClient(options: BankrClientOptions): BankrClient {
   const { mode, chain } = options;
 
   logger.info(`Bankr client initialized`, { mode, chain });
+
+  // Load config for live mode
+  let bankrConfig: BankrConfig | null = null;
+  if (mode === 'live') {
+    try {
+      bankrConfig = loadBankrConfig();
+      logger.info('Bankr API config loaded');
+    } catch (err) {
+      logger.error(`Failed to load Bankr config: ${err}`);
+      throw err;
+    }
+  }
 
   // Simulation state for testing
   let simBalance = { base: 100, quote: 1000 };
@@ -83,12 +236,16 @@ export function createBankrClient(options: BankrClientOptions): BankrClient {
       }
 
       // Live: query Bankr for price
-      const command = `What is the price of ${token} in ${quote} on ${chain}?`;
-      const response = await executeBankrCommand(command, mode);
+      const prompt = `What is the price of ${token} in ${quote} on ${chain}?`;
+      const response = await executeBankrPrompt(prompt, bankrConfig!);
       
-      // Parse response (Bankr returns natural language, we need to extract price)
-      // This parsing logic will depend on Bankr's actual response format
-      const price = parseFloat(response) || 0;
+      const price = parsePrice(response);
+      if (price === null) {
+        logger.warn(`Could not parse price from Bankr response: ${response.slice(0, 200)}`);
+        throw new Error('Failed to parse price from Bankr response');
+      }
+      
+      logger.info(`Bankr price: ${token}/${quote} = $${price}`);
       
       return {
         price,
@@ -102,9 +259,16 @@ export function createBankrClient(options: BankrClientOptions): BankrClient {
         return token === 'USDC' ? simBalance.quote : simBalance.base;
       }
 
-      const command = `What is my ${token} balance on ${chain}?`;
-      const response = await executeBankrCommand(command, mode);
-      return parseFloat(response) || 0;
+      const prompt = `What is my ${token} balance on ${chain}?`;
+      const response = await executeBankrPrompt(prompt, bankrConfig!);
+      
+      const balance = parseBalance(response, token);
+      if (balance === null) {
+        logger.warn(`Could not parse balance from Bankr response: ${response.slice(0, 200)}`);
+        return 0;
+      }
+      
+      return balance;
     },
 
     async buy(token: string, amountUsd: number): Promise<Trade> {
@@ -128,17 +292,24 @@ export function createBankrClient(options: BankrClientOptions): BankrClient {
         };
       }
 
-      const command = `Buy $${amountUsd} worth of ${token} on ${chain}`;
-      await executeBankrCommand(command, mode);
+      // Live: execute buy via Bankr
+      const prompt = `Buy $${amountUsd} worth of ${token} on ${chain}`;
+      logger.info(`Executing Bankr buy: ${prompt}`);
+      
+      const response = await executeBankrPrompt(prompt, bankrConfig!);
+      logger.info(`Bankr buy response: ${response.slice(0, 200)}`);
+      
+      // Parse what we can from the response
+      const price = parsePrice(response);
       
       return {
         id: tradeId,
         side: 'buy',
-        baseAmount: 0, // Would be parsed from response
+        baseAmount: price ? amountUsd / price : 0,
         quoteAmount: amountUsd,
-        price: 0,
+        price: price || 0,
         timestamp: new Date(),
-        status: 'pending',
+        status: 'executed',
       };
     },
 
@@ -163,24 +334,45 @@ export function createBankrClient(options: BankrClientOptions): BankrClient {
         };
       }
 
-      const command = `Sell $${amountUsd} worth of ${token} on ${chain}`;
-      await executeBankrCommand(command, mode);
+      // Live: execute sell via Bankr
+      const prompt = `Sell $${amountUsd} worth of ${token} on ${chain}`;
+      logger.info(`Executing Bankr sell: ${prompt}`);
+      
+      const response = await executeBankrPrompt(prompt, bankrConfig!);
+      logger.info(`Bankr sell response: ${response.slice(0, 200)}`);
+      
+      const price = parsePrice(response);
       
       return {
         id: tradeId,
         side: 'sell',
-        baseAmount: 0,
+        baseAmount: price ? amountUsd / price : 0,
         quoteAmount: amountUsd,
-        price: 0,
+        price: price || 0,
         timestamp: new Date(),
-        status: 'pending',
+        status: 'executed',
       };
     },
 
     async getPosition(baseToken: string, quoteToken: string): Promise<Position> {
-      const baseBalance = await this.getBalance(baseToken);
-      const quoteBalance = await this.getBalance(quoteToken);
-      const priceData = await this.getPrice(baseToken, quoteToken);
+      if (mode === 'simulation') {
+        const priceData = await this.getPrice(baseToken, quoteToken);
+        return {
+          baseAmount: simBalance.base,
+          quoteAmount: simBalance.quote,
+          baseValueUsd: simBalance.base * priceData.price,
+          quoteValueUsd: simBalance.quote,
+          totalValueUsd: simBalance.base * priceData.price + simBalance.quote,
+          timestamp: new Date(),
+        };
+      }
+
+      // For live mode, we need to get balances and price
+      const [baseBalance, quoteBalance, priceData] = await Promise.all([
+        this.getBalance(baseToken),
+        this.getBalance(quoteToken),
+        this.getPrice(baseToken, quoteToken),
+      ]);
       
       const baseValueUsd = baseBalance * priceData.price;
       const quoteValueUsd = quoteBalance; // Assuming quote is a stablecoin
