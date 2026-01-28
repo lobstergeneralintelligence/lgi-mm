@@ -4,9 +4,7 @@
 # Usage:
 #   cp docker-compose.example.yml docker-compose.yml
 #   # Edit docker-compose.yml with your password
-#   docker-compose up -d
-
-version: '3.8'
+#   docker compose up -d
 
 services:
   postgres:
