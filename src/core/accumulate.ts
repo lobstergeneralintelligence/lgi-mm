@@ -12,6 +12,7 @@
  */
 
 import { logger } from '../utils/logger.js';
+import { announceBuy } from '../utils/announce.js';
 import { getTokenPrice } from '../price/dexscreener.js';
 import { 
   updateAccumulateState, 
@@ -220,6 +221,20 @@ export function createAccumulateEngine(
       price: trade.price,
       totalAccumulated: state.totalAccumulated,
       tokenBalance: state.tokenBalance,
+    });
+
+    // Announce to Telegram
+    await announceBuy({
+      token: pair.base,
+      tokenAddress: pair.baseAddress || '',
+      chain: pair.chain,
+      amountUsd: amount,
+      tokensReceived: trade.baseAmount || 0,
+      price: currentPrice,
+      totalAccumulated: state.totalAccumulated,
+      maxBudget: acc.maxAccumulationUsd,
+      reason,
+      txHash: trade.txHash,
     });
 
     return true;
