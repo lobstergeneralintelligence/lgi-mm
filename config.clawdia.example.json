@@ -8,7 +8,8 @@
   "strategy": {
     "spreadPercent": 5.0,
     "positionSize": 25,
-    "rebalanceThreshold": 20
+    "rebalanceThreshold": 20,
+    "tickIntervalSeconds": 10
   },
   "limits": {
     "maxPositionUsd": 200,

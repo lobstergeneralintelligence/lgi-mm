@@ -238,6 +238,7 @@ export function createEngine(config: Config, bankr: BankrClient): MarketMakerEng
         pair: `${pair.base}/${pair.quote}`,
         chain: pair.chain,
         spread: `${strategy.spreadPercent}%`,
+        tickInterval: `${strategy.tickIntervalSeconds}s`,
         dryRun: config.dryRun,
       });
 
@@ -249,8 +250,8 @@ export function createEngine(config: Config, bankr: BankrClient): MarketMakerEng
       // Run initial tick
       await tick();
 
-      // Set up main loop (every 30 seconds - DexScreener is fast!)
-      const TICK_INTERVAL_MS = 30_000;
+      // Set up main loop based on config (default 10 seconds)
+      const TICK_INTERVAL_MS = strategy.tickIntervalSeconds * 1000;
       loopInterval = setInterval(() => {
         tick().catch((err) => {
           logger.error(`Tick failed: ${err}`);

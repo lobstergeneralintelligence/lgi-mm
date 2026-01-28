@@ -16,6 +16,7 @@ export interface StrategyConfig {
   spreadPercent: number;       // Target spread (e.g., 2.0 = 2%)
   positionSize: number;        // Size per trade in USD
   rebalanceThreshold: number;  // Rebalance when position drifts this %
+  tickIntervalSeconds: number; // How often to check prices (5-300 seconds)
 }
 
 export interface Limits {
