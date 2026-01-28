@@ -40,6 +40,7 @@ export interface AccumulateEngine {
   tick(): Promise<void>;
   getState(): AccumulateState;
   getJobId(): string;
+  isLocked(): boolean;
 }
 
 /**
@@ -62,6 +63,10 @@ export function createAccumulateEngine(
     totalAccumulated: job.totalAccumulated,
     tokenBalance: job.tokenBalance,
   };
+
+  // Trade lock to prevent concurrent tick execution
+  // (Bankr API is slow, ticks can overlap without this)
+  let tickLock = false;
 
   logger.info('Accumulate engine initialized from DB state', {
     jobId,
@@ -274,6 +279,13 @@ export function createAccumulateEngine(
 
   return {
     async tick(): Promise<void> {
+      // Prevent concurrent tick execution
+      if (tickLock) {
+        logger.debug('Tick skipped - previous tick still running');
+        return;
+      }
+      
+      tickLock = true;
       try {
         logger.info('Accumulate tick starting...');
         
@@ -338,6 +350,8 @@ export function createAccumulateEngine(
         const errorMsg = err instanceof Error ? err.message : String(err);
         logger.error(`Accumulate tick error: ${errorMsg}`);
         throw err;
+      } finally {
+        tickLock = false;
       }
     },
 
@@ -347,6 +361,10 @@ export function createAccumulateEngine(
 
     getJobId(): string {
       return jobId;
+    },
+
+    isLocked(): boolean {
+      return tickLock;
     },
   };
 }
