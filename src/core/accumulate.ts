@@ -26,6 +26,16 @@ import type {
   PriceData
 } from '../types/index.js';
 
+/**
+ * Format price to show full decimal (no scientific notation)
+ */
+function formatPrice(price: number): string {
+  if (price === 0) return '0';
+  if (price >= 0.01) return price.toFixed(6);
+  // For very small numbers, show up to 12 decimal places
+  return price.toFixed(12).replace(/\.?0+$/, '');
+}
+
 export interface AccumulateEngine {
   tick(): Promise<void>;
   getState(): AccumulateState;
@@ -276,7 +286,7 @@ export function createAccumulateEngine(
         }
         
         const currentPrice = priceData.price;
-        logger.info(`Price: $${currentPrice.toFixed(10)} | Recent high: $${state.recentHigh.toFixed(10)}`);
+        logger.info(`Price: $${formatPrice(currentPrice)} | Recent high: $${formatPrice(state.recentHigh)}`);
 
         // 2. Update recent high tracking
         const prevHigh = state.recentHigh;
