@@ -175,10 +175,15 @@ function parsePrice(response: string): number | null {
  * Handles Bankr formats like:
  * - "ETH - 0.002732388974206735 ($8.30)"
  * - "Token (0xbbd9...) - 1260425.075644998881241559 on Base"
+ * - "you currently have 0 of the token 0x..."
+ * - "you hold 1260425.07 of token..."
  */
 function parseBalance(response: string, token: string): number | null {
   // Look for balance patterns - order matters, most specific first
   const patterns = [
+    // Bankr conversational: "you currently have X" or "you hold X"
+    /you (?:currently )?have\s+([0-9,]+\.?[0-9]*)/i,
+    /you hold\s+([0-9,]+\.?[0-9]*)/i,
     // Bankr format: "TOKEN - NUMBER" or "Token (0x...) - NUMBER"
     /[-–]\s*([0-9,]+\.?[0-9]*)/,
     // Standard formats
