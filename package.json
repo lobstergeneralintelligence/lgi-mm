@@ -16,7 +16,8 @@
     "mm:status": "tsx src/cli/status.ts",
     "mm:stop": "tsx src/cli/stop.ts",
     "mm:pause": "tsx src/cli/pause.ts",
-    "mm:reset": "tsx src/cli/reset.ts"
+    "mm:reset": "tsx src/cli/reset.ts",
+    "mm:sell-dca": "tsx scripts/sell-dca.ts"
   },
   "keywords": [
     "clawdbot",
