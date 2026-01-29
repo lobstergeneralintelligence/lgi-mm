@@ -24,6 +24,10 @@ const CONFIG = {
   tokenSymbol: 'LGI',
   chain: 'base',
   
+  // Wallet (Bankr managed wallet for direct RPC queries)
+  walletAddress: '0xa3ef082d488b458826a3129496ea2a297fd313ae',
+  rpcUrl: 'https://mainnet.base.org',
+  
   // Timing (randomized)
   // Note: Bankr API calls add ~1-2 min per cycle, so actual trade frequency is interval + API time
   intervalMinMinutes: 0,
@@ -164,6 +168,49 @@ function parseTxHash(response: string): string | undefined {
 }
 
 // =============================================================================
+// DIRECT RPC BALANCE QUERIES (faster than Bankr)
+// =============================================================================
+
+async function getEthBalanceRpc(): Promise<number> {
+  const res = await fetch(CONFIG.rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'eth_getBalance',
+      params: [CONFIG.walletAddress, 'latest'],
+      id: 1
+    })
+  });
+  const data = await res.json() as { result: string };
+  return parseInt(data.result, 16) / 1e18;
+}
+
+async function getTokenBalanceRpc(): Promise<number> {
+  // ERC20 balanceOf call
+  const balanceOfSelector = '0x70a08231';
+  const paddedAddress = CONFIG.walletAddress.slice(2).padStart(64, '0');
+  const callData = balanceOfSelector + paddedAddress;
+  
+  const res = await fetch(CONFIG.rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'eth_call',
+      params: [{
+        to: CONFIG.tokenAddress,
+        data: callData
+      }, 'latest'],
+      id: 1
+    })
+  });
+  const data = await res.json() as { result: string };
+  // Assuming 18 decimals for LGI token
+  return parseInt(data.result, 16) / 1e18;
+}
+
+// =============================================================================
 // PRICE & DATA
 // =============================================================================
 
@@ -255,25 +302,16 @@ function saveState(state: State): void {
 // CORE LOGIC (to be implemented in next commit)
 // =============================================================================
 
-async function createSnapshot(bankrConfig: BankrConfig): Promise<Snapshot> {
-  log('Creating initial snapshot...');
+async function createSnapshot(): Promise<Snapshot> {
+  log('Creating initial snapshot via direct RPC...');
   
-  // Get balances from Bankr
-  const tokenRes = await bankrPrompt(
-    `What is my ${CONFIG.tokenAddress} balance on ${CONFIG.chain}?`,
-    bankrConfig
-  );
-  const tokenBalance = parseBalance(tokenRes);
-  
-  const ethRes = await bankrPrompt(
-    `What is my ETH balance on ${CONFIG.chain}?`,
-    bankrConfig
-  );
-  const ethBalance = parseBalance(ethRes);
-  
-  // Get prices
-  const tokenPrice = await getTokenPrice();
-  const ethPriceUsd = await getEthPrice();
+  // Get balances via direct RPC (fast!)
+  const [tokenBalance, ethBalance, tokenPrice, ethPriceUsd] = await Promise.all([
+    getTokenBalanceRpc(),
+    getEthBalanceRpc(),
+    getTokenPrice(),
+    getEthPrice(),
+  ]);
   
   // Calculate values
   const tokenValueUsd = tokenBalance * tokenPrice;
@@ -283,7 +321,7 @@ async function createSnapshot(bankrConfig: BankrConfig): Promise<Snapshot> {
   
   const snapshot: Snapshot = {
     createdAt: new Date().toISOString(),
-    wallet: 'bankr-managed (NOT fee claim wallet 0x0497...)',
+    wallet: CONFIG.walletAddress,
     initial: {
       tokenBalance,
       ethBalance,
@@ -307,7 +345,7 @@ async function createSnapshot(bankrConfig: BankrConfig): Promise<Snapshot> {
 // TRADING LOGIC
 // =============================================================================
 
-async function getCurrentPosition(bankrConfig: BankrConfig): Promise<{
+async function getCurrentPosition(): Promise<{
   tokenBalance: number;
   ethBalance: number;
   tokenPrice: number;
@@ -317,22 +355,15 @@ async function getCurrentPosition(bankrConfig: BankrConfig): Promise<{
   totalValueUsd: number;
   tokenRatio: number;
 }> {
-  // Get balances
-  const tokenRes = await bankrPrompt(
-    `What is my ${CONFIG.tokenAddress} balance on ${CONFIG.chain}?`,
-    bankrConfig
-  );
-  const tokenBalance = parseBalance(tokenRes);
-  
-  const ethRes = await bankrPrompt(
-    `What is my ETH balance on ${CONFIG.chain}?`,
-    bankrConfig
-  );
-  const ethBalance = parseBalance(ethRes);
-  
-  // Get prices
-  const tokenPrice = await getTokenPrice();
-  const ethPriceUsd = await getEthPrice();
+  // Get balances via direct RPC (fast!)
+  log('[RPC] Fetching balances...');
+  const [tokenBalance, ethBalance, tokenPrice, ethPriceUsd] = await Promise.all([
+    getTokenBalanceRpc(),
+    getEthBalanceRpc(),
+    getTokenPrice(),
+    getEthPrice(),
+  ]);
+  log(`[RPC] Token: ${tokenBalance.toLocaleString()}, ETH: ${ethBalance.toFixed(6)}`);
   
   // Calculate
   const tokenValueUsd = tokenBalance * tokenPrice;
@@ -451,7 +482,7 @@ Dry run: ${dryRun}
   // Load or create snapshot
   let snapshot = loadSnapshot();
   if (!snapshot) {
-    snapshot = await createSnapshot(bankrConfig);
+    snapshot = await createSnapshot();
     await announce(`🦞 <b>Market Maker Started</b>
 
 Initial snapshot:
@@ -460,7 +491,7 @@ Initial snapshot:
 - Total value: $${snapshot.initial.totalValueUsd.toFixed(2)}
 - Token ratio: ${(snapshot.initial.tokenRatio * 100).toFixed(1)}%
 
-Trading every 8-12 min with $8-18 random sizes.
+Trading every 0-1 min interval (+ trade time).
 Direction: below 30m MA = BUY, above = SELL`);
   } else {
     log('Loaded existing snapshot', { createdAt: snapshot.createdAt });
@@ -520,9 +551,8 @@ Direction: below 30m MA = BUY, above = SELL`);
       
       if (!running) break;
       
-      // Get current position
-      log('Fetching current position...');
-      const position = await getCurrentPosition(bankrConfig);
+      // Get current position via direct RPC
+      const position = await getCurrentPosition();
       
       // Update price history
       updatePriceHistory(state, position.tokenPrice, maPeriodMs);
