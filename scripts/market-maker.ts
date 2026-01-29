@@ -25,8 +25,9 @@ const CONFIG = {
   chain: 'base',
   
   // Timing (randomized)
-  intervalMinMinutes: 1,
-  intervalMaxMinutes: 12,
+  // Note: Bankr API calls add ~1-2 min per cycle, so actual trade frequency is interval + API time
+  intervalMinMinutes: 0,
+  intervalMaxMinutes: 1,
   
   // Trade size (randomized, USD)
   tradeSizeMin: 8,
