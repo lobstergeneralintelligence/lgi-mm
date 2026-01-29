@@ -25,7 +25,7 @@ const CONFIG = {
   chain: 'base',
   
   // Timing (randomized)
-  intervalMinMinutes: 8,
+  intervalMinMinutes: 1,
   intervalMaxMinutes: 12,
   
   // Trade size (randomized, USD)
@@ -37,8 +37,8 @@ const CONFIG = {
   priceCheckIntervalMinutes: 3,  // How often to update price history
   
   // Safety bounds (token ratio)
-  minTokenRatio: 0.20,
-  maxTokenRatio: 0.80,
+  minTokenRatio: 0.35,
+  maxTokenRatio: 0.65,
   
   // Files
   snapshotFile: 'mm-snapshot.json',
