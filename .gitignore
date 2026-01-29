@@ -40,3 +40,7 @@ logs/
 
 # State
 state.json
+
+# Market maker state
+mm-snapshot.json
+mm-state.json
