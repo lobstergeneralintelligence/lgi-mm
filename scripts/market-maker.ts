@@ -302,7 +302,132 @@ async function createSnapshot(bankrConfig: BankrConfig): Promise<Snapshot> {
   return snapshot;
 }
 
-// Main loop placeholder - will implement next
+// =============================================================================
+// TRADING LOGIC
+// =============================================================================
+
+async function getCurrentPosition(bankrConfig: BankrConfig): Promise<{
+  tokenBalance: number;
+  ethBalance: number;
+  tokenPrice: number;
+  ethPriceUsd: number;
+  tokenValueUsd: number;
+  ethValueUsd: number;
+  totalValueUsd: number;
+  tokenRatio: number;
+}> {
+  // Get balances
+  const tokenRes = await bankrPrompt(
+    `What is my ${CONFIG.tokenAddress} balance on ${CONFIG.chain}?`,
+    bankrConfig
+  );
+  const tokenBalance = parseBalance(tokenRes);
+  
+  const ethRes = await bankrPrompt(
+    `What is my ETH balance on ${CONFIG.chain}?`,
+    bankrConfig
+  );
+  const ethBalance = parseBalance(ethRes);
+  
+  // Get prices
+  const tokenPrice = await getTokenPrice();
+  const ethPriceUsd = await getEthPrice();
+  
+  // Calculate
+  const tokenValueUsd = tokenBalance * tokenPrice;
+  const ethValueUsd = ethBalance * ethPriceUsd;
+  const totalValueUsd = tokenValueUsd + ethValueUsd;
+  const tokenRatio = totalValueUsd > 0 ? tokenValueUsd / totalValueUsd : 0;
+  
+  return {
+    tokenBalance,
+    ethBalance,
+    tokenPrice,
+    ethPriceUsd,
+    tokenValueUsd,
+    ethValueUsd,
+    totalValueUsd,
+    tokenRatio,
+  };
+}
+
+async function executeTrade(
+  action: 'BUY' | 'SELL',
+  amountUsd: number,
+  bankrConfig: BankrConfig,
+  dryRun: boolean
+): Promise<{ success: boolean; txHash?: string }> {
+  const prompt = action === 'BUY'
+    ? `Buy $${amountUsd.toFixed(2)} worth of ${CONFIG.tokenAddress} on ${CONFIG.chain}`
+    : `Sell $${amountUsd.toFixed(2)} worth of ${CONFIG.tokenAddress} on ${CONFIG.chain}`;
+  
+  if (dryRun) {
+    log(`[DRY RUN] Would execute: ${prompt}`);
+    return { success: true };
+  }
+  
+  try {
+    const response = await bankrPrompt(prompt, bankrConfig, 180000);
+    const txHash = parseTxHash(response);
+    return { success: true, txHash };
+  } catch (err) {
+    log(`Trade failed: ${err}`);
+    return { success: false };
+  }
+}
+
+function updatePriceHistory(
+  state: State,
+  price: number,
+  maPeriodMs: number
+): void {
+  const now = Date.now();
+  
+  // Add new price
+  state.priceHistory.push({ price, timestamp: now });
+  
+  // Remove old prices (older than MA period)
+  const cutoff = now - maPeriodMs;
+  state.priceHistory = state.priceHistory.filter(p => p.timestamp > cutoff);
+}
+
+function decideAction(
+  currentPrice: number,
+  ma: number,
+  tokenRatio: number
+): 'BUY' | 'SELL' | 'HOLD' {
+  // Check ratio bounds first
+  if (tokenRatio >= CONFIG.maxTokenRatio) {
+    log(`Token ratio ${(tokenRatio * 100).toFixed(1)}% at max, forcing SELL`);
+    return 'SELL';
+  }
+  if (tokenRatio <= CONFIG.minTokenRatio) {
+    log(`Token ratio ${(tokenRatio * 100).toFixed(1)}% at min, forcing BUY`);
+    return 'BUY';
+  }
+  
+  // No MA yet? Hold
+  if (ma === 0) {
+    log('No MA data yet, holding');
+    return 'HOLD';
+  }
+  
+  // Price vs MA decision
+  const deviation = (currentPrice - ma) / ma;
+  
+  if (currentPrice < ma) {
+    log(`Price $${currentPrice.toFixed(10)} below MA $${ma.toFixed(10)} (${(deviation * 100).toFixed(2)}%) → BUY`);
+    return 'BUY';
+  } else {
+    log(`Price $${currentPrice.toFixed(10)} above MA $${ma.toFixed(10)} (${(deviation * 100).toFixed(2)}%) → SELL`);
+    return 'SELL';
+  }
+}
+
+// =============================================================================
+// MAIN LOOP
+// =============================================================================
+
 async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
@@ -314,11 +439,13 @@ Token: ${CONFIG.tokenSymbol}
 Interval: ${CONFIG.intervalMinMinutes}-${CONFIG.intervalMaxMinutes} min
 Trade size: $${CONFIG.tradeSizeMin}-${CONFIG.tradeSizeMax}
 MA period: ${CONFIG.maPeriodMinutes} min
+Ratio bounds: ${CONFIG.minTokenRatio * 100}% - ${CONFIG.maxTokenRatio * 100}%
 Dry run: ${dryRun}
 ═══════════════════════════════════════
 `);
 
   const bankrConfig = loadBankrConfig();
+  const maPeriodMs = CONFIG.maPeriodMinutes * 60 * 1000;
   
   // Load or create snapshot
   let snapshot = loadSnapshot();
@@ -332,22 +459,149 @@ Initial snapshot:
 - Total value: $${snapshot.initial.totalValueUsd.toFixed(2)}
 - Token ratio: ${(snapshot.initial.tokenRatio * 100).toFixed(1)}%
 
-Trading every 8-12 min with $8-18 random sizes.`);
+Trading every 8-12 min with $8-18 random sizes.
+Direction: below 30m MA = BUY, above = SELL`);
   } else {
     log('Loaded existing snapshot', { createdAt: snapshot.createdAt });
   }
   
   // Load state
-  const state = loadState();
+  let state = loadState();
   log('State loaded', { 
     priceHistoryLength: state.priceHistory.length,
     totalBuys: state.totalBuys,
     totalSells: state.totalSells,
   });
   
-  log('Core trading loop will be implemented in next commit...');
+  // Graceful shutdown
+  let running = true;
+  process.on('SIGINT', () => {
+    log('Shutdown requested...');
+    running = false;
+  });
+  process.on('SIGTERM', () => {
+    log('Shutdown requested...');
+    running = false;
+  });
   
-  // TODO: Implement main trading loop
+  log('Starting main trading loop...');
+  
+  // Initial price fetch to seed MA
+  const initialPrice = await getTokenPrice();
+  updatePriceHistory(state, initialPrice, maPeriodMs);
+  saveState(state);
+  log(`Initial price: $${initialPrice.toFixed(10)}`);
+  
+  // Main loop
+  while (running) {
+    try {
+      // Random interval for this cycle
+      const intervalMin = randomBetween(
+        CONFIG.intervalMinMinutes,
+        CONFIG.intervalMaxMinutes
+      );
+      const intervalMs = intervalMin * 60 * 1000;
+      
+      log(`Waiting ${intervalMin.toFixed(1)} min until next trade...`);
+      
+      // Wait (but check for shutdown periodically)
+      const waitStart = Date.now();
+      while (running && Date.now() - waitStart < intervalMs) {
+        await sleep(10000); // Check every 10s
+        
+        // Update price history every few minutes
+        if (Date.now() - waitStart > CONFIG.priceCheckIntervalMinutes * 60 * 1000) {
+          const price = await getTokenPrice();
+          updatePriceHistory(state, price, maPeriodMs);
+          saveState(state);
+        }
+      }
+      
+      if (!running) break;
+      
+      // Get current position
+      log('Fetching current position...');
+      const position = await getCurrentPosition(bankrConfig);
+      
+      // Update price history
+      updatePriceHistory(state, position.tokenPrice, maPeriodMs);
+      
+      // Calculate MA
+      const ma = calculateMA(state.priceHistory);
+      
+      log(`Position: ${position.tokenBalance.toLocaleString()} tokens ($${position.tokenValueUsd.toFixed(2)}) + ${position.ethBalance.toFixed(4)} ETH ($${position.ethValueUsd.toFixed(2)})`);
+      log(`Token ratio: ${(position.tokenRatio * 100).toFixed(1)}% | MA: $${ma.toFixed(10)} (${state.priceHistory.length} samples)`);
+      
+      // Decide action
+      const action = decideAction(position.tokenPrice, ma, position.tokenRatio);
+      
+      if (action === 'HOLD') {
+        log('Holding this round');
+        saveState(state);
+        continue;
+      }
+      
+      // Random trade size
+      const tradeSize = randomBetween(CONFIG.tradeSizeMin, CONFIG.tradeSizeMax);
+      
+      // Check if we have enough balance
+      if (action === 'BUY' && position.ethValueUsd < tradeSize) {
+        log(`Not enough ETH ($${position.ethValueUsd.toFixed(2)}) for $${tradeSize.toFixed(2)} buy`);
+        saveState(state);
+        continue;
+      }
+      if (action === 'SELL' && position.tokenValueUsd < tradeSize) {
+        log(`Not enough tokens ($${position.tokenValueUsd.toFixed(2)}) for $${tradeSize.toFixed(2)} sell`);
+        saveState(state);
+        continue;
+      }
+      
+      // Execute trade
+      log(`Executing ${action} $${tradeSize.toFixed(2)}...`);
+      const result = await executeTrade(action, tradeSize, bankrConfig, dryRun);
+      
+      if (result.success) {
+        // Update stats
+        if (action === 'BUY') {
+          state.totalBuys++;
+          state.totalBuyVolume += tradeSize;
+        } else {
+          state.totalSells++;
+          state.totalSellVolume += tradeSize;
+        }
+        state.lastTradeTime = Date.now();
+        
+        const totalTrades = state.totalBuys + state.totalSells;
+        const totalVolume = state.totalBuyVolume + state.totalSellVolume;
+        
+        log(`${action} successful! Total: ${totalTrades} trades, $${totalVolume.toFixed(2)} volume`);
+        
+        // Announce
+        const txLink = result.txHash ? `\n\nhttps://basescan.org/tx/${result.txHash}` : '';
+        await announce(`${action === 'BUY' ? '🟢' : '🔴'} <b>MM ${action}</b>: $${tradeSize.toFixed(2)}
+
+Price: $${position.tokenPrice.toFixed(10)}
+MA: $${ma.toFixed(10)}
+Ratio: ${(position.tokenRatio * 100).toFixed(1)}%
+
+Total: ${totalTrades} trades | $${totalVolume.toFixed(2)} volume${txLink}`);
+      }
+      
+      saveState(state);
+      
+    } catch (err) {
+      log(`Error in main loop: ${err}`);
+      await sleep(30000); // Wait 30s on error
+    }
+  }
+  
+  log('Market maker stopped');
+  await announce(`🛑 <b>Market Maker Stopped</b>
+
+Final stats:
+- Buys: ${state.totalBuys} ($${state.totalBuyVolume.toFixed(2)})
+- Sells: ${state.totalSells} ($${state.totalSellVolume.toFixed(2)})
+- Total volume: $${(state.totalBuyVolume + state.totalSellVolume).toFixed(2)}`);
 }
 
 main().catch(console.error);
